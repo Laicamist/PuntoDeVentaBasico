@@ -1,46 +1,25 @@
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
 from tkinter import ttk
-
 import customtkinter as ctk
-
-# ---------- Configuración de IVA ----------
-TASA_IVA = "0.16"
-PRECIOS_INCLUYEN_IVA = True
-
-# ---------- Paleta arcade ----------
-FONDO = "#0a0a1f"
-PANEL = "#14052b"
-CIAN = "#00fff7"
-MAGENTA = "#ff2bd6"
-AMARILLO = "#ffe600"
-VERDE = "#39ff14"
-ROJO = "#ff3131"
-FUENTE = "Courier New"
-
-MENSAJE_INICIAL = ">> INSERT COIN: ESCANEA UN PRODUCTO <<"
-
-
-def dinero(valor):
-    return Decimal(valor).quantize(Decimal("0.01"), ROUND_HALF_UP)
-
-
-def fuente(tam, negrita=True):
-    return ctk.CTkFont(family=FUENTE, size=tam, weight="bold" if negrita else "normal")
+from config import TITULO_APP
+from logica.calculos import calcular_importe
+from modelos import DetalleVenta, Producto, VentaError, SinConexionError
+from ui.tema import (FONDO, PANEL, CIAN, MAGENTA, AZUL, AMARILLO, VERDE, ROJO, FUENTE,
+                     MENSAJE_INICIAL, fuente)
 
 
 class PantallaVenta(ctk.CTk):
-    def __init__(self, buscar_producto, guardar_venta, error_inicial=None):
+    def __init__(self, servicio, error_inicial=None):
         super().__init__(fg_color=FONDO)
         ctk.set_appearance_mode("dark")
 
-        self.buscar_producto = buscar_producto
-        self.guardar_venta = guardar_venta
-        self.carrito = {}
+        self.servicio = servicio
+        self.carrito = {}        # codigo_barras -> DetalleVenta
+        self.descripciones = {}  # codigo_barras -> descripción (solo para mostrar)
         self._parpadeo_visible = True
 
-        self.title("SUPER POS ARCADE")
-        self.geometry("1050x720")
+        self.title(TITULO_APP)
+        self.geometry("1050x740")
         self.minsize(950, 650)
 
         self.var_folio = ctk.StringVar(value="NUEVO")
@@ -70,7 +49,7 @@ class PantallaVenta(ctk.CTk):
 
     # ------------------------------------------------------------------ UI
     def _crear_titulo(self):
-        ctk.CTkLabel(self, text="★ SUPER POS ARCADE ★", font=fuente(34),
+        ctk.CTkLabel(self, text=f"★ {TITULO_APP} ★", font=fuente(34),
                      text_color=MAGENTA).pack(pady=(12, 0))
         ctk.CTkLabel(self, text="- - - PLAYER 1 READY - - -", font=fuente(13),
                      text_color=CIAN).pack(pady=(0, 6))
@@ -84,7 +63,7 @@ class PantallaVenta(ctk.CTk):
         return e
 
     def _crear_encabezado(self):
-        marco = ctk.CTkFrame(self, fg_color=PANEL, border_color=MAGENTA, border_width=2, corner_radius=0)
+        marco = ctk.CTkFrame(self, fg_color=PANEL, border_color=AZUL, border_width=2, corner_radius=0)
         marco.pack(fill="x", padx=15, pady=6)
 
         ctk.CTkLabel(marco, text="FOLIO", font=fuente(14), text_color=AMARILLO).grid(
@@ -117,7 +96,7 @@ class PantallaVenta(ctk.CTk):
                       hover_color="#3a0a0a", command=self.quitar_seleccionado).pack(side="right", padx=12)
 
     def _crear_grid(self):
-        marco = ctk.CTkFrame(self, fg_color=PANEL, border_color=MAGENTA, border_width=2, corner_radius=0)
+        marco = ctk.CTkFrame(self, fg_color=PANEL, border_color=AZUL, border_width=2, corner_radius=0)
         marco.pack(fill="both", expand=True, padx=15, pady=6)
 
         estilo = ttk.Style()
@@ -143,7 +122,7 @@ class PantallaVenta(ctk.CTk):
             self.grid_ventas.heading(col, text=texto)
             self.grid_ventas.column(col, width=ancho, anchor=ancla)
 
-        scroll = ctk.CTkScrollbar(marco, command=self.grid_ventas.yview, button_color=MAGENTA,
+        scroll = ctk.CTkScrollbar(marco, command=self.grid_ventas.yview, button_color=AZUL,
                                   button_hover_color=CIAN, fg_color=PANEL)
         self.grid_ventas.configure(yscrollcommand=scroll.set)
         self.grid_ventas.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
@@ -221,7 +200,7 @@ class PantallaVenta(ctk.CTk):
                       command=lambda: cerrar(True)).pack(side="left", padx=8)
         if confirmar:
             ctk.CTkButton(fila, text="NO", width=130, height=40, corner_radius=0, font=fuente(15),
-                          fg_color=FONDO, border_color=MAGENTA, border_width=2, text_color=MAGENTA,
+                          fg_color=FONDO, border_color=AZUL, border_width=2, text_color=MAGENTA,
                           command=lambda: cerrar(False)).pack(side="left", padx=8)
 
         top.bind("<Return>", lambda e: cerrar(True))
@@ -246,7 +225,7 @@ class PantallaVenta(ctk.CTk):
             return
 
         try:
-            producto = self.buscar_producto(codigo)
+            producto = self.servicio.buscar_producto(codigo)
         except Exception as error:
             self._dialogo("ERROR", f"No se pudo consultar el producto:\n{error}", ROJO)
             return
@@ -260,32 +239,32 @@ class PantallaVenta(ctk.CTk):
         self.var_cantidad.set("1")
 
     # ------------------------------------------------------- Lógica de UI
-    def agregar_producto(self, producto, cantidad=1):
-        codigo = producto["codigo_barras"]
-        item = self.carrito.get(codigo)
-        nueva = (item["cantidad"] if item else 0) + cantidad
+    def agregar_producto(self, producto: Producto, cantidad=1):
+        codigo = producto.codigo_barras
+        actual = self.carrito.get(codigo)
+        nueva = (actual.cantidad if actual else 0) + cantidad
 
-        if nueva > producto["stock"]:
-            self._mensaje(f"!! STOCK INSUFICIENTE: {producto['descripcion']} "
-                          f"(DISPONIBLE: {producto['stock']}) !!", ROJO)
+        if nueva > producto.stock:
+            self._mensaje(f"!! STOCK INSUFICIENTE: {producto.descripcion} "
+                          f"(DISPONIBLE: {producto.stock}) !!", ROJO)
             self.bell()
             return
 
-        precio = dinero(producto["precio"])
-        self.carrito[codigo] = {
-            "codigo_barras": codigo,
-            "descripcion": producto["descripcion"],
-            "precio_unitario": precio,
-            "cantidad": nueva,
-            "importe": dinero(precio * nueva),
-        }
+        self.carrito[codigo] = DetalleVenta(
+            codigo_producto=codigo,
+            cantidad=nueva,
+            precio_unitario=producto.precio,
+            importe=calcular_importe(producto.precio, nueva),
+        )
+        self.descripciones[codigo] = producto.descripcion
         self._refrescar_fila(codigo)
         self._calcular_totales()
-        self._mensaje(f"+1 AGREGADO: {producto['descripcion']}", VERDE)
+        self._mensaje(f"+{cantidad} AGREGADO: {producto.descripcion}", VERDE)
 
     def _refrescar_fila(self, codigo):
-        i = self.carrito[codigo]
-        valores = (codigo, i["descripcion"], f"{i['precio_unitario']:.2f}", i["cantidad"], f"{i['importe']:.2f}")
+        d = self.carrito[codigo]
+        valores = (codigo, self.descripciones[codigo], f"{d.precio_unitario:.2f}",
+                   d.cantidad, f"{d.importe:.2f}")
         if self.grid_ventas.exists(codigo):
             self.grid_ventas.item(codigo, values=valores)
         else:
@@ -299,24 +278,16 @@ class PantallaVenta(ctk.CTk):
         codigo = seleccion[0]
         self.grid_ventas.delete(codigo)
         self.carrito.pop(codigo, None)
+        self.descripciones.pop(codigo, None)
         self._calcular_totales()
         self._mensaje("PRODUCTO ELIMINADO", AMARILLO)
         self.entry_codigo.focus_set()
 
     def _calcular_totales(self):
-        tasa = Decimal(TASA_IVA)
-        suma = sum((i["importe"] for i in self.carrito.values()), Decimal("0"))
-        if PRECIOS_INCLUYEN_IVA:
-            total = dinero(suma)
-            subtotal = dinero(total / (1 + tasa))
-            iva = total - subtotal
-        else:
-            subtotal = dinero(suma)
-            iva = dinero(subtotal * tasa)
-            total = subtotal + iva
-        self.var_subtotal.set(f"{subtotal:.2f}")
-        self.var_iva.set(f"{iva:.2f}")
-        self.var_total.set(f"{total:.2f}")
+        t = self.servicio.totales(list(self.carrito.values()))
+        self.var_subtotal.set(f"{t.subtotal:.2f}")
+        self.var_iva.set(f"{t.iva:.2f}")
+        self.var_total.set(f"{t.total:.2f}")
 
     def guardar(self):
         if not self.carrito:
@@ -327,18 +298,17 @@ class PantallaVenta(ctk.CTk):
             self._mensaje("!! CAPTURA EL NOMBRE DEL EMPLEADO !!", ROJO)
             return
 
-        items = [{"codigo_barras": i["codigo_barras"], "cantidad": i["cantidad"],
-                  "precio_unitario": i["precio_unitario"], "importe": i["importe"]}
-                 for i in self.carrito.values()]
         try:
-            folio = self.guardar_venta(empleado, items, Decimal(self.var_subtotal.get()),
-                                       Decimal(self.var_iva.get()), Decimal(self.var_total.get()))
+            venta = self.servicio.guardar_venta(empleado, list(self.carrito.values()))
+        except (VentaError, SinConexionError) as error:
+            self._dialogo("NO SE GUARDÓ LA VENTA", str(error), ROJO)
+            return
         except Exception as error:
             self._dialogo("ERROR AL GUARDAR", f"No se guardó la venta (se hizo rollback):\n{error}", ROJO)
             return
 
-        self.var_folio.set(str(folio))
-        self._dialogo("¡VENTA GUARDADA!", f"FOLIO: {folio}\nTOTAL: ${self.var_total.get()}", VERDE)
+        self.var_folio.set(str(venta.folio))
+        self._dialogo("¡VENTA GUARDADA!", f"FOLIO: {venta.folio}\nTOTAL: ${venta.total:.2f}", VERDE)
         self._limpiar()
 
     def cancelar_venta(self):
@@ -348,6 +318,7 @@ class PantallaVenta(ctk.CTk):
 
     def _limpiar(self):
         self.carrito.clear()
+        self.descripciones.clear()
         self.grid_ventas.delete(*self.grid_ventas.get_children())
         self._calcular_totales()
         self.var_folio.set("NUEVO")
