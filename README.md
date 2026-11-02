@@ -27,4 +27,4 @@ Cada capa solo usa a la de abajo:
 1. Instala las dependencias: `pip install -r requirements.txt`
 2. En MySQL ejecuta `database/schema.sql` y luego `database/datos_prueba.sql`.
 3. Copia `.env.example` como `.env` y pon tu usuario y contraseña de MySQL.
-4. Desde la raíz del proyecto: `python src/main.py`
+4. Desde la raíz del proyecto: `python src/main.py` ejecutaras el programa
