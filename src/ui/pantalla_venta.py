@@ -1,12 +1,13 @@
 from datetime import datetime
 from tkinter import ttk
 import customtkinter as ctk
+import os
 from config import TITULO_APP
 from logica.calculos import calcular_importe
 from modelos import DetalleVenta, Producto, VentaError, SinConexionError
 from ui.tema import (FONDO, PANEL, CIAN, MAGENTA, AZUL, AMARILLO, VERDE, ROJO, FUENTE,
                      MENSAJE_INICIAL, fuente)
-
+from documentos.recibo import generar_recibo
 
 class PantallaVenta(ctk.CTk):
     def __init__(self, servicio, error_inicial=None):
@@ -308,8 +309,16 @@ class PantallaVenta(ctk.CTk):
             return
 
         self.var_folio.set(str(venta.folio))
+        self._imprimir_recibo(venta)
         self._dialogo("¡VENTA GUARDADA!", f"FOLIO: {venta.folio}\nTOTAL: ${venta.total:.2f}", VERDE)
         self._limpiar()
+
+    def _imprimir_recibo(self, venta):
+        try:
+            ruta = generar_recibo(venta, self.descripciones)
+            os.startfile(ruta)  #Abre en el Bloc de notas
+        except Exception as error:
+            self._mensaje(f"!! VENTA GUARDADA, PERO NO SE GENERÓ EL RECIBO: {error} !!", AMARILLO)
 
     def cancelar_venta(self):
         if self.carrito and not self._dialogo("CANCELAR", "¿Descartar la venta actual?", AMARILLO, confirmar=True):
